@@ -23,7 +23,7 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 {
   po::options_description options_description("Options");
   options_description.add_options()
-    ("images,i", po::value<std::string>(), "pattern of images or path to video")  
+    ("images,i", po::value<std::string>(), "pattern of images or path to video") // (Example: the pattern could be form image_%3d.png for images of the form image_000.png)
     ("poses,p", po::value<std::string>(), "2D odometry/ground truth in CSV format (x,y,theta)")
 
     ("output,o", po::value<std::string>()->required(), "output bag file")

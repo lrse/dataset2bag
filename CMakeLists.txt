@@ -49,12 +49,12 @@ find_package(Boost REQUIRED program_options)
 ## LIBRARIES: libraries you create in this project that dependent projects also need
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
-catkin_package(
-   INCLUDE_DIRS include
+#catkin_package(
+#   INCLUDE_DIRS include
 #  LIBRARIES dataset2bag
 #  CATKIN_DEPENDS cv_bridge rosbag roscpp sensor_msgs
 #  DEPENDS system_lib
-)
+#)
 
 ###########
 ## Build ##
@@ -62,9 +62,9 @@ catkin_package(
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-include_directories(include
-  ${catkin_INCLUDE_DIRS}
-)
+#include_directories(include
+#  ${catkin_INCLUDE_DIRS}
+#)
 
 ## Declare a cpp library
 # add_library(dataset2bag
