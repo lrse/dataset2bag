@@ -27,7 +27,7 @@ bool process_args(int argc, char** argv, po::variables_map& options)
     ("poses,p", po::value<std::string>(), "2D odometry/ground truth in CSV format (x,y,theta)")
 
     ("output,o", po::value<std::string>()->required(), "output bag file")
-    ("skip,s", po::value<int>(), "skip an ammount of frames for each frame processed")
+    ("skip,s", po::value<int>()->default_value(0), "skip an ammount of frames for each frame processed")
     
     /*("image-timestamps", po::value<std::string>(), "file with one timestamp per frame")
     ("image-delta", po::value<int>(), "artificial delta between frames in milliseconds")
@@ -151,4 +151,5 @@ int main(int argc, char** argv)
     }
     cout << endl;
   }
+  bag.close();
 }
