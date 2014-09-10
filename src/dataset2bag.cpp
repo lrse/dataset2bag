@@ -1,11 +1,14 @@
 #include <ros/ros.h>
 #include <rosbag/bag.h>
 #include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/program_options.hpp>
 #include <boost/tuple/tuple_io.hpp>
+#include <boost/numeric/ublas/io.hpp>
+#include <boost/numeric/ublas/matrix.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -23,12 +26,13 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 {
   po::options_description options_description("Options");
   options_description.add_options()
-    ("images,i", po::value<std::string>(), "pattern of images or path to video") // (Example: the pattern could be form image_%3d.png for images of the form image_000.png)
+    ("images,l", po::value<std::string>(), "pattern of left images or path to video (or mono-camera)") // (Example: the pattern could be form image_%3d.png for images of the form image_000.png)
+    ("images_right,r", po::value<std::string>(), "pattern of right images or path to video") // (Example: the pattern could be form image_%3d.png for images of the form image_000.png)
     ("poses,p", po::value<std::string>(), "2D odometry/ground truth in CSV format (x,y,theta)")
 
     ("output,o", po::value<std::string>()->required(), "output bag file")
     ("skip,s", po::value<int>()->default_value(0), "skip an ammount of frames for each frame processed")
-    
+    ("message,m", po::value<std::string>(), "message parameters file")
     /*("image-timestamps", po::value<std::string>(), "file with one timestamp per frame")
     ("image-delta", po::value<int>(), "artificial delta between frames in milliseconds")
     
@@ -51,6 +55,11 @@ bool process_args(int argc, char** argv, po::variables_map& options)
   return true;
 }
 
+
+
+
+
+
 int main(int argc, char** argv)
 {
   po::variables_map options;
@@ -65,6 +74,35 @@ int main(int argc, char** argv)
   boost::posix_time::ptime t0 = boost::posix_time::microsec_clock::local_time();
   // TODO: read first of list otherwise
   
+
+  // open parameters file
+  cout << "Loading and writing message information..." << endl;
+  if (options.count("message")) {
+      std::ifstream ifs(options["message"].as<std::string>().c_str());
+      boost::array<double,9> calibration, rotation;
+
+      // read height and width
+      unsigned int height, width;
+      ifs >> height;
+      ifs >> width;
+
+      cout << height;
+      cout << width;
+
+      // read calibration matrix
+      for(int i = 0; i < 9; ++i) {
+        ifs >> calibration[i];
+        cout << calibration[i];
+      }
+
+      // create CameraInfo message
+      sensor_msgs::CameraInfo camera_info;
+      camera_info.height = height;
+      camera_info.width = height;
+      camera_info.K = calibration;
+      camera_info.R = rotation;
+  }
+
   // open poses file
   cout << "Loading and writing poses..." << endl;
   if (options.count("poses")) {
@@ -110,9 +148,19 @@ int main(int argc, char** argv)
     }
   }
 
+  // is a stereo dataset?
+  bool IsStereo =  options.count("images_right") > 0;
+
+
+
   // open images
   if (options.count("images") > 0) {
     cv::VideoCapture capture(options["images"].as<std::string>());
+
+    // declare capture_right
+    cv::VideoCapture capture_right;
+    if (IsStereo) // if there is an stereo source open it
+      capture_right = cv::VideoCapture(options["images_right"].as<std::string>());
 
     // image timestamps
     std::list<double> image_timestamps;
@@ -125,21 +173,44 @@ int main(int argc, char** argv)
     }
 
     cout << "Loading and writing images..." << endl;
-    cv_bridge::CvImage ros_image;
+    cv_bridge::CvImage ros_image, ros_image_right;
     uint seq = 0;
     boost::posix_time::ptime t = t0;
     boost::posix_time::time_duration image_delta = boost::posix_time::milliseconds(30);
+
     // TODO: read from list otherwise
     int total_frames = (int)capture.get(CV_CAP_PROP_FRAME_COUNT);
     int i = 0, skip_counter = 0;
     cout << "total_frames: " << total_frames << endl;
+
     while (capture.read(ros_image.image)) {
       if (options.count("skip") > 0 && skip_counter == options["skip"].as<int>())
       {
-        cv::Mat rgb;
         cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
         ros_image.encoding = "rgb8";
-        bag.write("/camera/image_raw", ros::Time::fromBoost(t), ros_image.toImageMsg());
+        // stereo behavior
+        if (IsStereo) {
+          capture_right.read(ros_image_right.image);
+          cv::cvtColor(ros_image_right.image, ros_image_right.image, CV_BGR2RGB);
+          ros_image_right.encoding = "rgb8";
+
+          bag.write("/stereo/left/image_raw", ros::Time::fromBoost(t), ros_image.toImageMsg());
+          bag.write("/stereo/right/image_raw", ros::Time::fromBoost(t), ros_image_right.toImageMsg());
+
+          // create CameraInfo messages
+          sensor_msgs::CameraInfo camera_info;
+          boost::posix_time::time_duration time_of_day = t.time_of_day();
+          camera_info.header.seq = seq;
+          camera_info.header.stamp = ros::Time::fromBoost(t);
+          camera_info.header.frame_id = "camera";
+          bag.write("/stereo/left/camera_info", ros::Time::fromBoost(t), camera_info);
+          bag.write("/stereo/right/camera_info", ros::Time::fromBoost(t), camera_info);
+
+        }
+        else {
+          bag.write("/camera/image_raw", ros::Time::fromBoost(t), ros_image.toImageMsg());
+        }
+
         skip_counter = 0;
       }
       else skip_counter++;

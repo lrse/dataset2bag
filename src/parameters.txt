@@ -1,0 +1,4 @@
+640
+480
+1 0 0 0 1 0 0 0 1
+// todavia no esta implementado bien el uso de este archivo
