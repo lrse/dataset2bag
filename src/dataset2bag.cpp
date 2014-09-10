@@ -194,12 +194,25 @@ int main(int argc, char** argv)
           cv::cvtColor(ros_image_right.image, ros_image_right.image, CV_BGR2RGB);
           ros_image_right.encoding = "rgb8";
 
-          bag.write("/stereo/left/image_raw", ros::Time::fromBoost(t), ros_image.toImageMsg());
-          bag.write("/stereo/right/image_raw", ros::Time::fromBoost(t), ros_image_right.toImageMsg());
+          // create Image message left
+          sensor_msgs::ImagePtr ros_image_left_msg, ros_image_right_msg;
+          ros_image_left_msg = ros_image.toImageMsg();
+          ros_image_left_msg->header.seq = seq;
+          ros_image_left_msg->header.stamp = ros::Time::fromBoost(t);
+          ros_image_left_msg->header.frame_id = "camera";
+
+          // create image message right
+          ros_image_right_msg = ros_image_right.toImageMsg();
+          ros_image_right_msg->header.seq = seq;
+          ros_image_right_msg->header.stamp = ros::Time::fromBoost(t);
+          ros_image_right_msg->header.frame_id = "camera";
+
+
+          bag.write("/stereo/left/image_raw", ros::Time::fromBoost(t), ros_image_left_msg);
+          bag.write("/stereo/right/image_raw", ros::Time::fromBoost(t), ros_image_right_msg);
 
           // create CameraInfo messages
           sensor_msgs::CameraInfo camera_info;
-          boost::posix_time::time_duration time_of_day = t.time_of_day();
           camera_info.header.seq = seq;
           camera_info.header.stamp = ros::Time::fromBoost(t);
           camera_info.header.frame_id = "camera";
