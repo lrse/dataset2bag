@@ -4,6 +4,8 @@ project(dataset2bag)
 ## for DEBUGGING
 SET(CMAKE_BUILD_TYPE Debug)
 
+set(CMAKE_CXX_FLAGS "-std=c++11 -Wall ${CMAKE_CXX_FLAGS}")
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
