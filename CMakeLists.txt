@@ -54,12 +54,12 @@ find_package(Boost REQUIRED program_options)
 ## LIBRARIES: libraries you create in this project that dependent projects also need
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
-#catkin_package(
+catkin_package(
 #   INCLUDE_DIRS include
 #  LIBRARIES dataset2bag
-#  CATKIN_DEPENDS cv_bridge rosbag roscpp sensor_msgs
+  CATKIN_DEPENDS cv_bridge rosbag roscpp sensor_msgs
 #  DEPENDS system_lib
-#)
+)
 
 ###########
 ## Build ##

@@ -23,29 +23,21 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 {
   po::options_description options_description("Options");
   options_description.add_options()
-
-    // (Example: the pattern could be form image_%3d.png for images of the form image_000.png)
     ("images,l", po::value<std::string>()->required(), "pattern of left images or path to video (or mono-camera)")
 
-    // (Example: the pattern could be form image_%3d.png for images of the form image_000.png)
     ("images_right,r", po::value<std::string>(), "pattern of right images or path to video")
 
-    ("poses,p", po::value<std::string>(), "2D odometry/ground truth in CSV format (x,y,theta)")
+    ("odometry", po::value<std::string>(), "path to file containing 2D odometry data")
 
     ("output,o", po::value<std::string>()->required(), "output bag file")
 
-    //~ ("skip,s", po::value<int>()->default_value(0), "skip an ammount of frames for each frame processed")
-
     ("calib,c", po::value<std::string>()->required(), "left camera calibration parameters file")
 
-    ("calib_right,c", po::value<std::string>(), "right camera calibration parameters file")
+    ("calib_right", po::value<std::string>(), "right camera calibration parameters file")
 
-    /*("image-timestamps", po::value<std::string>(), "file with one timestamp per frame")
-    ("image-delta", po::value<int>(), "artificial delta between frames in milliseconds")
-    
-    ("poses-have-timestamps", "indicates that poses file have a leading field including timestamp")
-    ("pose-delta", po::value<int>(), "artificial delta between poses in milliseconds")*/
-    
+    ("timestamps,t", po::value<std::string>(), "path to file containing timestamps")
+    ("framerate,f", po::value<float>(), "frame-rate to assume when not supplying timestamps from file")
+
     ("help,h", "show this help")
   ;
 
@@ -68,19 +60,19 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 }
 
 /**
- * @brief expects a file with a list of whitespace separated doubles
- * representing timestamps.
+ * @brief expects a file with a list of timestamps (<seconds> <nanoseconds>).
  */
-std::vector<ros::Time> loadTimestamps( const std::string& filename )
+std::vector<ros::Time> loadTimestamps(const std::string& filename)
 {
   std::vector<ros::Time> timestamps;
 
-  std::ifstream ifs( filename.c_str() );
+  std::ifstream ifs(filename.c_str());
 
-  while ( ifs ) {
-    double timestamp;
-    ifs >> timestamp;
-    timestamps.push_back( ros::Time( timestamp ) );
+  while (!ifs.eof()) {
+    uint32_t sec, nsec;
+    ifs >> sec >> nsec;
+    //std::cout << sec << "." << nsec << std::endl;
+    timestamps.push_back(ros::Time(sec, nsec));
   }
 
   return timestamps;
@@ -116,7 +108,15 @@ std::vector<ros::Time> loadTimestamps( size_t nFrames, double framerate )
 /**
  * @brief intrinsic calibration file is expected in row major order:
  * 
- *   K11 K12 K13 K21 K22 K23 K31 K32 K33
+ *   K11 K12 K13
+ *   K21 K22 K23
+ *   K31 K32 K33
+ *
+ *   D1 D2 D3 D4 D5
+ *
+ *   R11 R12 R13
+ *   R21 R22 R33
+ *   R31 R32 R33
  *
  * @param width
  *   image width in pixels.
@@ -138,11 +138,21 @@ sensor_msgs::CameraInfo loadCameraCalibration( const std::string& filename, size
     ifs >> intrinsics[i];
   }
 
+  std::vector<double> dist_coefficients(5);
+  for(int i = 0; i < 5; ++i) {
+    ifs >> dist_coefficients[i];
+  }
+
+  boost::array<double, 9> rectification;
+  for(int i = 0; i < 9; ++i) {
+    ifs >> rectification[i];
+  }
+
   // create CameraInfo message
   sensor_msgs::CameraInfo camera_info;
 
   camera_info.height = height;
-  camera_info.width = height;
+  camera_info.width = width;
 
   // The distortion model used. Supported models are listed in
   // sensor_msgs/distortion_models.h. For most cameras, "plumb_bob" - a
@@ -151,11 +161,17 @@ sensor_msgs::CameraInfo loadCameraCalibration( const std::string& filename, size
 
   // The distortion parameters, size depending on the distortion model.
   // For "plumb_bob", the 5 parameters are: (k1, k2, t1, t2, k3).
-  camera_info.D = {0, 0, 0, 0, 0}; // TODO
+  camera_info.D = dist_coefficients;
 
   camera_info.K = intrinsics;
 
-  camera_info.R = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+  camera_info.R = rectification;
+
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 4; j++) {
+      camera_info.P[i * 4 + j] = (j < 3 ? camera_info.K[i * 3 + j] : 0);
+    }
+  }
 
   return camera_info;
 }
@@ -166,7 +182,7 @@ void saveStream( cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info,
 
   uint seq = 0;
 
-  while ( capture.read( ros_image.image ) /*and seq < 500*/ )
+  while (capture.read(ros_image.image))
   {
     std::cout << "loading image " << seq << "/" << times.size() << std::endl;
     cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
@@ -181,7 +197,7 @@ void saveStream( cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info,
     ros_image_msg->header.stamp = times[ seq ];
     ros_image_msg->header.frame_id = frame_id;
 
-    bag.write(topic + "/image_rect", times[ seq ], ros_image_msg);
+    bag.write(topic + "/image_raw", times[ seq ], ros_image_msg);
 
     // create CameraInfo message
 
@@ -191,6 +207,53 @@ void saveStream( cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info,
     camera_info.header.frame_id = frame_id;
 
     bag.write(topic + "/camera_info", times[ seq ], camera_info);
+
+    seq++;
+  }
+}
+
+void saveOdometry(const std::string& filename, rosbag::Bag& bag)
+{
+  std::ifstream ifs(filename);
+
+  size_t seq = 0;
+  while(!ifs.eof()) {
+    float x, y, yaw;
+    uint32_t sec, nsec;
+
+    ifs >> sec >> nsec >> x >> y >> yaw;
+
+    //std::cout << sec << "." << nsec << " " << x << " " << y << " " << yaw << std::endl;
+
+    ros::Time stamp(sec, nsec);
+
+    // write odometry message
+    nav_msgs::Odometry odo_msg;
+    odo_msg.header.stamp = stamp;
+    odo_msg.header.frame_id = "odom";
+    odo_msg.child_frame_id = "base_link";
+    odo_msg.pose.pose.position.x = x;
+    odo_msg.pose.pose.position.y = y;
+    odo_msg.pose.pose.position.z = 0;
+    odo_msg.pose.pose.orientation = tf::createQuaternionMsgFromYaw(yaw);
+    bag.write("/robot/odometry", stamp, odo_msg);
+
+    // write tf message
+    geometry_msgs::TransformStamped tmsg;
+    tmsg.header.stamp = stamp;
+    tmsg.header.frame_id = "odom";
+    tmsg.child_frame_id = "base_link";
+    tmsg.transform.translation.x = odo_msg.pose.pose.position.x;
+    tmsg.transform.translation.y = odo_msg.pose.pose.position.y;
+    tmsg.transform.translation.z = 0;
+    tmsg.transform.rotation = odo_msg.pose.pose.orientation;
+
+    tf::tfMessage tf_msg;
+    tf_msg.transforms.push_back(tmsg);
+    tf_msg.transforms.back().header.frame_id = tf::resolve("", tf_msg.transforms.back().header.frame_id);
+    tf_msg.transforms.back().child_frame_id = tf::resolve("", tf_msg.transforms.back().child_frame_id);
+
+    bag.write("/tf", stamp, tf_msg);
 
     seq++;
   }
@@ -210,7 +273,7 @@ int main(int argc, char** argv)
 
   size_t width = (size_t) capture_left.get( CV_CAP_PROP_FRAME_WIDTH );
   size_t height = (size_t) capture_left.get( CV_CAP_PROP_FRAME_HEIGHT );
-  int nFrames = (int) capture_left.get( CV_CAP_PROP_FRAME_COUNT );
+  size_t nFrames = (size_t) capture_left.get( CV_CAP_PROP_FRAME_COUNT );
 
   std::cout << "-- Loading " << nFrames << " frames of size " << width << "x" << height << std::endl;
 
@@ -219,10 +282,7 @@ int main(int argc, char** argv)
 
   std::cout << "Parsing timestamps ..." << std::endl;
 
-  // TODO hardcoded
-  double framerate = 1.0 / 30;
-
-  std::vector<ros::Time> timestamps = options.count("timestamps") ? loadTimestamps( options["timestamps"].as<std::string>() ) : loadTimestamps( nFrames, framerate );
+  std::vector<ros::Time> timestamps = options.count("timestamps") ? loadTimestamps( options["timestamps"].as<std::string>() ) : loadTimestamps( nFrames, 1 / options["framerate"].as<float>() );
 
   std::cout << "ts: " << timestamps.size() << std::endl;
   assert( nFrames == timestamps.size() );
@@ -231,6 +291,13 @@ int main(int argc, char** argv)
   rosbag::Bag bag;
 
   bag.open(options["output"].as<std::string>(), rosbag::bagmode::Write);
+
+  if ( options.count("odometry") ) {
+
+    std::cout << "Parsing odometry file..." << std::endl;
+
+    saveOdometry(options["odometry"].as<std::string>(), bag);
+  }
 
   if ( options.count("images_right") )
   {
@@ -252,49 +319,6 @@ int main(int argc, char** argv)
     std::cout << "Parsing mono images ..." << std::endl;
 
     saveStream( capture_left, cam_info_left, timestamps, "camera", "/camera", bag );
-  }
-
-  if ( options.count("poses") ) {
-
-    std::cout << "Parsing ground truth poses ..." << std::endl;
-    
-    std::ifstream ifs(options["poses"].as<std::string>().c_str());
-    ifs >> boost::tuples::set_delimiter(',') >> boost::tuples::set_open(' ') >> boost::tuples::set_close(' ');
-
-    size_t seq = 0;
-    while(ifs.good()) {
-      // TODO: poses with timestamps case
-      boost::tuple<float, float, float, float> tuple;
-      ifs >> tuple;
-
-      // write odometry message
-      nav_msgs::Odometry odo_msg;
-      odo_msg.header.frame_id = "odom";
-      odo_msg.child_frame_id = "base_link";
-      odo_msg.pose.pose.position.x = tuple.get<0>();
-      odo_msg.pose.pose.position.y = tuple.get<1>();
-      odo_msg.pose.pose.position.z = 0;
-      odo_msg.pose.pose.orientation = tf::createQuaternionMsgFromYaw(tuple.get<3>());
-      bag.write("/robot/odometry", timestamps[ seq ], odo_msg);
-
-      // write tf message
-      geometry_msgs::TransformStamped tmsg;
-      tmsg.header.frame_id = "odom";
-      tmsg.child_frame_id = "base_link";
-      tmsg.transform.translation.x = odo_msg.pose.pose.position.x;
-      tmsg.transform.translation.y = odo_msg.pose.pose.position.y;
-      tmsg.transform.translation.z = 0;
-      tmsg.transform.rotation = odo_msg.pose.pose.orientation;
-      
-      tf::tfMessage tf_msg;
-      tf_msg.transforms.push_back(tmsg);
-      tf_msg.transforms.back().header.frame_id = tf::resolve("", tf_msg.transforms.back().header.frame_id);
-      tf_msg.transforms.back().child_frame_id = tf::resolve("", tf_msg.transforms.back().child_frame_id);
-      
-      bag.write("/tf", timestamps[ seq ], tf_msg);
-
-      seq++;
-    }
   }
 
   bag.close();
