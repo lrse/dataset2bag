@@ -4,6 +4,8 @@ project(dataset2bag)
 ## for DEBUGGING
 SET(CMAKE_BUILD_TYPE Debug)
 
+set(CMAKE_CXX_FLAGS "-std=c++11 -Wall ${CMAKE_CXX_FLAGS}")
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -52,12 +54,12 @@ find_package(Boost REQUIRED program_options)
 ## LIBRARIES: libraries you create in this project that dependent projects also need
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
-#catkin_package(
+catkin_package(
 #   INCLUDE_DIRS include
 #  LIBRARIES dataset2bag
-#  CATKIN_DEPENDS cv_bridge rosbag roscpp sensor_msgs
+  CATKIN_DEPENDS cv_bridge rosbag roscpp sensor_msgs
 #  DEPENDS system_lib
-#)
+)
 
 ###########
 ## Build ##
