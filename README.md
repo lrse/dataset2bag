@@ -46,8 +46,30 @@ El archivo de timestamps deberia tener una linea por cada imagen, en el formato 
 
 ## Odometria
 
-El archivo contiene una linea por cada muestra de odometria. El formato es:
+Formato:
 
     [segundos] [nanosegundos] [x] [y] [angulo]
 
 Las unidades son metros y radianes.
+
+## IMU
+
+Formato:
+
+    [segundos] [nanosegundos] [aX] [aY] [aZ] [wX] [wY] [wZ] [R1] ... [R9]
+
+El archivo contiene: timestamp, aceleración (m/s^2), velocidad angular (rad/s), orientacion como matriz
+de 3x3
+
+## Ground-truth
+
+Este archivo contiene informacion de poses de ground-truth en 2D. El formato es el siguiente:
+
+    [segundos] [nanosegundos] [x] [y] [theta]
+
+Opcionalmente, se puede utilizar un archivo que contenga la informacion de covarianza de la pose:
+
+    [segundos] [nanosegundos] [x] [y] [theta] [Cxx] [Cxy] [Cxt] [Cyx] [Cyy] [Cyt] [Ctx] [Cty] [Ctt]
+
+
+

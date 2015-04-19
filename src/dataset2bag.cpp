@@ -2,6 +2,11 @@
 #include <rosbag/bag.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/LaserScan.h>
+#include <image_geometry/pinhole_camera_model.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
@@ -37,6 +42,13 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 
     ("timestamps,t", po::value<std::string>(), "path to file containing timestamps")
     ("framerate,f", po::value<float>(), "frame-rate to assume when not supplying timestamps from file")
+
+    ("imu", po::value<std::string>(), "path to IMU data file")
+    ("groundtruth", po::value<std::string>(), "path to ground-truth data file")
+    ("gt-with-covariance", "if specified, the ground-truth file contains covariance information")
+
+    //("static-transforms", po::value<std::string>(), "path to file containing static transforms between sensors")
+    //("laser", po::value<std::string>(), "path to laser scans file")
 
     ("help,h", "show this help")
   ;
@@ -105,73 +117,31 @@ std::vector<ros::Time> loadTimestamps( size_t nFrames, double framerate )
   return timestamps;
 }
 
-/**
- * @brief intrinsic calibration file is expected in row major order:
- * 
- *   K11 K12 K13
- *   K21 K22 K23
- *   K31 K32 K33
- *
- *   D1 D2 D3 D4 D5
- *
- *   R11 R12 R13
- *   R21 R22 R33
- *   R31 R32 R33
- *
- * @param width
- *   image width in pixels.
- *
- * @param height
- *   image height in pixels.
- * 
- * @param baseline
- *   camera baseline. 0 for mono camera and for left stereo camera,
- *   used to specify the relative position of the right stereo camera.
- */
 sensor_msgs::CameraInfo loadCameraCalibration( const std::string& filename, size_t width, size_t height )
 {
-  std::ifstream ifs( filename.c_str() );
-
-  // read calibration matrix
   boost::array<double, 9> intrinsics;
-  for(int i = 0; i < 9; ++i) {
-    ifs >> intrinsics[i];
-  }
-
   std::vector<double> dist_coefficients(5);
-  for(int i = 0; i < 5; ++i) {
-    ifs >> dist_coefficients[i];
-  }
-
   boost::array<double, 9> rectification;
-  for(int i = 0; i < 9; ++i) {
-    ifs >> rectification[i];
-  }
+
+  std::ifstream ifs( filename.c_str() );
+  for(int i = 0; i < 9; ++i) ifs >> intrinsics[i];
+  for(int i = 0; i < 5; ++i) ifs >> dist_coefficients[i];
+  for(int i = 0; i < 9; ++i) ifs >> rectification[i];
 
   // create CameraInfo message
   sensor_msgs::CameraInfo camera_info;
 
   camera_info.height = height;
   camera_info.width = width;
-
-  // The distortion model used. Supported models are listed in
-  // sensor_msgs/distortion_models.h. For most cameras, "plumb_bob" - a
-  // simple model of radial and tangential distortion - is sufficent.
   camera_info.distortion_model = "plumb_bob";
-
-  // The distortion parameters, size depending on the distortion model.
-  // For "plumb_bob", the 5 parameters are: (k1, k2, t1, t2, k3).
   camera_info.D = dist_coefficients;
-
   camera_info.K = intrinsics;
-
   camera_info.R = rectification;
 
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 4; j++) {
-      camera_info.P[i * 4 + j] = (j < 3 ? camera_info.K[i * 3 + j] : 0);
-    }
-  }
+  /* build P from K */
+  cv::Mat K(3, 3, CV_64FC1, intrinsics.c_array());
+  cv::Mat P = K * cv::Mat::eye(3, 4, CV_64FC1);
+  for (int i = 0; i < P.total(); i++) camera_info.P[i] = *(P.ptr<double>(0) + i);
 
   return camera_info;
 }
@@ -182,7 +152,7 @@ void saveStream( cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info,
 
   uint seq = 0;
 
-  while (capture.read(ros_image.image))
+  while (capture.read(ros_image.image) /*&& seq < 500*/)
   {
     std::cout << "loading image " << seq << "/" << times.size() << std::endl;
     cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
@@ -259,6 +229,154 @@ void saveOdometry(const std::string& filename, rosbag::Bag& bag)
   }
 }
 
+void saveIMU(const std::string& filename, rosbag::Bag& bag)
+{
+  std::ifstream ifs(filename);
+
+  size_t seq = 0;
+  while(!ifs.eof()) {
+    float acc[3], gyro[3], R[9];
+    uint32_t sec, nsec;
+
+    ifs >> sec >> nsec;
+    ros::Time stamp(sec, nsec);
+
+    for (int i = 0; i < 3; i++) ifs >> gyro[i];
+    for (int i = 0; i < 3; i++) ifs >> acc[i];
+    for (int i = 0; i < 9; i++) ifs >> R[i];
+
+    sensor_msgs::Imu imu_msg;
+    imu_msg.header.stamp = stamp;
+    imu_msg.header.seq = seq;
+    imu_msg.header.frame_id = "imu";
+    imu_msg.angular_velocity.x = gyro[0];
+    imu_msg.angular_velocity.y = gyro[1];
+    imu_msg.angular_velocity.z = gyro[2];
+    imu_msg.linear_acceleration.x = acc[0];
+    imu_msg.linear_acceleration.y = acc[1];
+    imu_msg.linear_acceleration.z = acc[2];
+
+    tf::Quaternion Q;
+    tf::Matrix3x3 Rmat(R[0], R[1], R[2], R[3], R[4], R[5], R[6], R[7], R[8]);
+    Rmat.getRotation(Q);
+    tf::quaternionTFToMsg(Q, imu_msg.orientation);
+
+    bag.write("/imu", stamp, imu_msg);
+    seq++;
+  }
+}
+
+void saveGT(const std::string& filename, rosbag::Bag& bag, bool with_covariance)
+{
+  std::ifstream ifs(filename);
+
+  if (with_covariance) std::cout << "... with covariance" << std::endl;
+
+  size_t seq = 0;
+  while(!ifs.eof()) {
+    uint32_t sec, nsec;
+    float x, y, theta;
+    float cov[9];
+
+    ifs >> sec >> nsec;
+    //std::cout << sec << "." << nsec << std::endl;
+    ros::Time stamp(sec, nsec);
+
+    ifs >> x >> y >> theta;
+    if (with_covariance) {
+      for (int i = 0; i < 9; i++) ifs >> cov[i];
+
+      geometry_msgs::PoseWithCovarianceStamped pose;
+      pose.header.stamp = stamp;
+      pose.header.seq = seq;
+      pose.header.frame_id = "groundtruth";
+
+      pose.pose.pose.position.x = x;
+      pose.pose.pose.position.y = y;
+      pose.pose.pose.position.z = 0;
+      tf::quaternionTFToMsg(tf::createQuaternionFromYaw(theta).normalized(), pose.pose.pose.orientation);
+
+      for (int i = 0; i < 36; i++) pose.pose.covariance[i] = 999999.0; // initialize unknown covariance to big values
+
+      pose.pose.covariance[0] = cov[0]; // Cxx
+      pose.pose.covariance[1] = cov[1]; // Cxy
+      pose.pose.covariance[5] = cov[2]; // Cxt (t = rot around Z)
+
+      pose.pose.covariance[6] = cov[3]; // Cyx
+      pose.pose.covariance[7] = cov[4]; // Cyy
+      pose.pose.covariance[11] = cov[5]; // Cyt
+
+      pose.pose.covariance[30] = cov[6]; // Ctx
+      pose.pose.covariance[31] = cov[7]; // Cty
+      pose.pose.covariance[35] = cov[8]; // Ctt
+
+      bag.write("/groundtruth_pose", stamp, pose);
+    }
+    else {
+      geometry_msgs::PoseStamped pose;
+      pose.header.stamp = stamp;
+      pose.header.seq = seq;
+      pose.header.frame_id = "groundtruth";
+
+      pose.pose.position.x = x;
+      pose.pose.position.y = y;
+      pose.pose.position.z = 0;
+      tf::quaternionTFToMsg(tf::createQuaternionFromYaw(theta), pose.pose.orientation);
+
+      bag.write("/groundtruth_pose", stamp, pose);
+    }
+  }
+
+  seq++;
+}
+
+/* not yet finished */
+#if 0
+void saveTransforms(const std::string& filename, rosbag::Bag& bag)
+{
+  std::ifstream ifs(filename);
+
+  size_t seq = 0;
+  while(!ifs.eof()) {
+    uint32_t sec, nsec;
+    ifs >> sec >> nsec;
+    //std::cout << sec << "." << nsec << std::endl;
+    ros::Time stamp(sec, nsec);
+  }
+}
+#endif
+
+/* not yet finished */
+#if 0
+void saveLaser(const std::string& filename, rosbag::Bag& bag, bool with_covariance)
+{
+  std::ifstream ifs(filename);
+
+  size_t seq = 0;
+  while(!ifs.eof()) {
+    uint32_t sec, nsec;
+    ifs >> sec >> nsec;
+    ros::Time stamp(sec, nsec);
+
+    float delta_angle;
+    size_t scan_count;
+    ifs >> delta_angle >> scan_count;
+
+    sensor_msgs::LaserScan laser_msg;
+    laser_msg.header.stamp = stamp;
+    laser_msg.header.seq = seq;
+    laser_msg.angle_increment = delta_angle;
+
+    laser_msg.ranges.resize(scan_count);
+    for (int i = 0; i < scan_count; i++) ifs >> laser_msgs.ranges[i];
+
+    laser_msg.angle_min =
+
+    seq++;
+  }
+}
+#endif
+
 int main(int argc, char** argv)
 {
   po::variables_map options;
@@ -292,12 +410,34 @@ int main(int argc, char** argv)
 
   bag.open(options["output"].as<std::string>(), rosbag::bagmode::Write);
 
-  if ( options.count("odometry") ) {
-
+  if (options.count("odometry")) {
     std::cout << "Parsing odometry file..." << std::endl;
-
     saveOdometry(options["odometry"].as<std::string>(), bag);
   }
+
+  if (options.count("imu")) {
+    std::cout << "Parsing IMU data..." << std::endl;
+    saveIMU(options["imu"].as<std::string>(), bag);
+  }
+
+  if (options.count("groundtruth")) {
+    std::cout << "Parsing ground-truth data..." << std::endl;
+    saveGT(options["groundtruth"].as<std::string>(), bag, options.count("gt-with-covariance"));
+  }
+
+#if 0
+  if (options.count("static-transforms")) {
+    std::cout << "Parsing static transforms file..." << std::endl;
+    saveTransforms(options["static-transforms"].as<std::string>(), bag);
+  }
+#endif
+
+#if 0
+  if (options.count("laser")) {
+    std::cout << "Parsing laser data..." << std::endl;
+    saveLaser(options["laser"].as<std::string>(), bag);
+  }
+#endif
 
   if ( options.count("images_right") )
   {
