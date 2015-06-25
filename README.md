@@ -23,8 +23,8 @@ Ejemplo de imagenes mono:
 
 ## Calibracion
 
-La calibracion contiene los parametros en formato similar al de ROS: parametros intrinsecos, de distorsion y matriz de
-rectificacion. TODO: falta matriz de proyeccion
+La calibracion contiene los parametros en formato similar al de ROS: parametros intrinsecos (3x3), de distorsion (5x1) y los parametros extrinsecos de rotacion (3x3) y traslacion (3x1).
+Estos ultimos solo tienen sentido en el caso de un par estereo. En el caso monocular, asi como la camara estereo izquierda, la rotacion deberia ser la identidad y la traslacion un vector nulo.
 
     K11 K12 K13
     K21 K22 K23
@@ -36,7 +36,7 @@ rectificacion. TODO: falta matriz de proyeccion
     R21 R22 R33
     R31 R32 R33
 
-TODO
+    Tx Ty Tz
 
 ## Timestamps
 
