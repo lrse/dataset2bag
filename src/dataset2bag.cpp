@@ -47,7 +47,7 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 {
   po::options_description options_description("Options");
   options_description.add_options()
-    ("images,l", po::value<std::string>()->required(), "pattern of left images or path to video (or mono-camera)")
+    ("images,l", po::value<std::string>(), "pattern of left images or path to video (or mono-camera)")
 
     ("images_right,r", po::value<std::string>(), "pattern of right images or path to video")
 
@@ -55,7 +55,7 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 
     ("output,o", po::value<std::string>()->required(), "output bag file")
 
-    ("calib,c", po::value<std::string>()->required(), "left camera calibration parameters file")
+    ("calib,c", po::value<std::string>(), "left camera calibration parameters file")
 
     ("calib_right", po::value<std::string>(), "right camera calibration parameters file")
 
@@ -67,7 +67,7 @@ bool process_args(int argc, char** argv, po::variables_map& options)
     ("gt-with-covariance", "if specified, the ground-truth file contains covariance information")
 
     //("static-transforms", po::value<std::string>(), "path to file containing static transforms between sensors")
-    //("laser", po::value<std::string>(), "path to laser scans file")
+    ("laser", po::value<std::string>(), "path to laser scans file")
 
     ("help,h", "show this help")
   ;
@@ -393,7 +393,7 @@ void saveGT(const std::string& filename, rosbag::Bag& bag, bool with_covariance)
       geometry_msgs::PoseWithCovarianceStamped pose;
       pose.header.stamp = stamp;
       pose.header.seq = seq;
-      pose.header.frame_id = "groundtruth";
+      pose.header.frame_id = "qtruth";
 
       pose.pose.pose.position.x = x;
       pose.pose.pose.position.y = y;
@@ -452,11 +452,20 @@ void saveTransforms(const std::string& filename, rosbag::Bag& bag)
 }
 #endif
 
-/* not yet finished */
-#if 0
-void saveLaser(const std::string& filename, rosbag::Bag& bag, bool with_covariance)
+void saveLaser(const std::string& filename, rosbag::Bag& bag)
 {
-  std::ifstream ifs(filename);
+  pretty_ifstream ifs(80, filename, std::ios::in);
+
+  float delta_angle, range_min, range_max, angle_min, angle_max;
+  size_t scan_count;
+  ifs >> delta_angle >> scan_count;
+  ifs >> range_min >> range_max;
+  ifs >> angle_min >> angle_max;
+  //std::cout << "reading laser: " << delta_angle << " " << scan_count << " " << range_min << " " << range_max << " " << angle_min << " " << angle_max << std::endl;
+
+  angle_min = angle_min * M_PI / 180.0;
+  angle_max = angle_max * M_PI / 180.0;
+  delta_angle = delta_angle * M_PI / 180.0;
 
   size_t seq = 0;
   while(!ifs.eof()) {
@@ -464,24 +473,24 @@ void saveLaser(const std::string& filename, rosbag::Bag& bag, bool with_covarian
     ifs >> sec >> nsec;
     ros::Time stamp(sec, nsec);
 
-    float delta_angle;
-    size_t scan_count;
-    ifs >> delta_angle >> scan_count;
-
     sensor_msgs::LaserScan laser_msg;
     laser_msg.header.stamp = stamp;
     laser_msg.header.seq = seq;
+    laser_msg.header.frame_id = "laser";
     laser_msg.angle_increment = delta_angle;
+    laser_msg.range_min = range_min;
+    laser_msg.range_max = range_max;
+    laser_msg.angle_min = angle_min;
+    laser_msg.angle_max = angle_max;
 
     laser_msg.ranges.resize(scan_count);
-    for (int i = 0; i < scan_count; i++) ifs >> laser_msgs.ranges[i];
+    for (size_t i = 0; i < scan_count; i++) ifs >> laser_msg.ranges[i];
 
-    laser_msg.angle_min =
-
+    bag.write("/scan", stamp, laser_msg);
+    ifs.drawbar();
     seq++;
   }
 }
-#endif
 
 int main(int argc, char** argv)
 {
@@ -490,25 +499,6 @@ int main(int argc, char** argv)
   if ( not process_args(argc, argv, options) )
     return EXIT_FAILURE;
 
-  // open video captures
-
-  std::string left_images = options["images"].as<std::string>();
-  cv::VideoCapture capture_left( left_images );
-
-  size_t width = (size_t) capture_left.get( CV_CAP_PROP_FRAME_WIDTH );
-  size_t height = (size_t) capture_left.get( CV_CAP_PROP_FRAME_HEIGHT );
-  size_t nFrames = (size_t) capture_left.get( CV_CAP_PROP_FRAME_COUNT );
-
-  std::cout << "-- Loading " << nFrames << " frames of size " << width << "x" << height << std::endl;
-
-  std::cout << "Parsing timestamps ..." << std::endl;
-
-  std::vector<ros::Time> timestamps = options.count("timestamps") ? loadTimestamps( options["timestamps"].as<std::string>() ) : loadTimestamps( nFrames, 1 / options["framerate"].as<float>() );
-
-  std::cout << "loaded: " << timestamps.size() << " timestamps" << std::endl;
-  assert( nFrames == timestamps.size() );
-
-  // open a new bag file in write mode
   rosbag::Bag bag;
 
   bag.open(options["output"].as<std::string>(), rosbag::bagmode::Write);
@@ -535,40 +525,61 @@ int main(int argc, char** argv)
   }
 #endif
 
-#if 0
   if (options.count("laser")) {
     std::cout << "Parsing laser data..." << std::endl;
     saveLaser(options["laser"].as<std::string>(), bag);
   }
-#endif
 
-  if ( options.count("images_right") )
+  /** process images **/
+  if (options.count("images") != 0)
   {
-    assert( options.count("calib_right") );
+    assert( options.count("calib") );
 
-    std::cout << "Parsing stereo camera calibrations ..." << std::endl;
-    std::string left_calib = options["calib"].as<std::string>();
-    std::string right_calib = options["calib_right"].as<std::string>();
-    sensor_msgs::CameraInfo cam_info_left, cam_info_right;
-    loadStereoCameraCalibration( left_calib, right_calib, width, height, cam_info_left, cam_info_right );
+    std::string left_images = options["images"].as<std::string>();
+    cv::VideoCapture capture_left( left_images );
 
-    std::string right_images = options["images_right"].as<std::string>();
-    cv::VideoCapture capture_right( right_images );
+    size_t width = (size_t) capture_left.get( CV_CAP_PROP_FRAME_WIDTH );
+    size_t height = (size_t) capture_left.get( CV_CAP_PROP_FRAME_HEIGHT );
+    size_t nFrames = (size_t) capture_left.get( CV_CAP_PROP_FRAME_COUNT );
 
-    std::cout << "Parsing left stereo images ..." << std::endl;
-    saveStream( capture_left, cam_info_left, timestamps, "camera_left", "/stereo/left", bag );
+    std::cout << "-- Loading " << nFrames << " frames of size " << width << "x" << height << std::endl;
 
-    std::cout << "Parsing right stereo images ..." << std::endl;
-    saveStream( capture_right, cam_info_right, timestamps, "camera_right", "/stereo/right", bag );
-  }
-  else
-  {
-    std::cout << "Parsing camera calibration ..." << std::endl;
-    std::string left_calib = options["calib"].as<std::string>();
-    sensor_msgs::CameraInfo cam_info_left = loadCameraInfo( left_calib, width, height );
+    std::cout << "Parsing timestamps ..." << std::endl;
 
-    std::cout << "Parsing camera images ..." << std::endl;
-    saveStream( capture_left, cam_info_left, timestamps, "camera", "/camera", bag );
+    std::vector<ros::Time> timestamps = options.count("timestamps") ? loadTimestamps( options["timestamps"].as<std::string>() ) : loadTimestamps( nFrames, 1 / options["framerate"].as<float>() );
+
+    std::cout << "loaded: " << timestamps.size() << " timestamps" << std::endl;
+    assert( nFrames == timestamps.size() );
+
+
+    if ( options.count("images_right") )
+    {
+      assert( options.count("calib_right") );
+
+      std::cout << "Parsing stereo camera calibrations ..." << std::endl;
+      std::string left_calib = options["calib"].as<std::string>();
+      std::string right_calib = options["calib_right"].as<std::string>();
+      sensor_msgs::CameraInfo cam_info_left, cam_info_right;
+      loadStereoCameraCalibration( left_calib, right_calib, width, height, cam_info_left, cam_info_right );
+
+      std::string right_images = options["images_right"].as<std::string>();
+      cv::VideoCapture capture_right( right_images );
+
+      std::cout << "Parsing left stereo images ..." << std::endl;
+      saveStream( capture_left, cam_info_left, timestamps, "camera_left", "/stereo/left", bag );
+
+      std::cout << "Parsing right stereo images ..." << std::endl;
+      saveStream( capture_right, cam_info_right, timestamps, "camera_right", "/stereo/right", bag );
+    }
+    else
+    {
+      std::cout << "Parsing camera calibration ..." << std::endl;
+      std::string left_calib = options["calib"].as<std::string>();
+      sensor_msgs::CameraInfo cam_info_left = loadCameraInfo( left_calib, width, height );
+
+      std::cout << "Parsing camera images ..." << std::endl;
+      saveStream( capture_left, cam_info_left, timestamps, "camera", "/camera", bag );
+    }
   }
 
   bag.close();

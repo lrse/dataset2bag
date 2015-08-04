@@ -71,5 +71,16 @@ Opcionalmente, se puede utilizar un archivo que contenga la informacion de covar
 
     [segundos] [nanosegundos] [x] [y] [theta] [Cxx] [Cxy] [Cxt] [Cyx] [Cyy] [Cyt] [Ctx] [Cty] [Ctt]
 
+## Laser
+
+En este archivo se tiene primero unos valores del sensor:
+
+    [angle_increment] [scan_count] [min_range] [max_range] [min_angle] [max_angle]
+
+donde los angulos son en grados y las distancias son en metros.
+
+Luego, se tiene una linea por scaneo con el siguiente formato:
+
+    [segundos] [nanosegundos] [range_1] ... [range_N]
 
 
