@@ -96,12 +96,17 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 std::vector<ros::Time> loadTimestamps(const std::string& filename)
 {
   std::vector<ros::Time> timestamps;
-
   std::ifstream ifs(filename.c_str());
+	std::string line;
 
-  while ( not ifs.eof() ) {
-    uint32_t sec, nsec;
-    ifs >> sec >> nsec;
+  while (std::getline(ifs, line))
+	{
+		std::stringstream ss(line);
+
+		uint32_t sec, nsec;
+    ss >> sec >> nsec;
+
+		if (!ss) throw std::runtime_error("Invalid timestamp!");
     timestamps.push_back(ros::Time(sec, nsec));
   }
 
@@ -139,7 +144,7 @@ CameraParameters loadCameraCalibration( const std::string& filename )
 {
   CameraParameters ret;
 
-  std::ifstream ifs( filename.c_str() );
+  std::ifstream ifs(filename.c_str());
 
   // Intrinsic parameters
 
@@ -219,6 +224,12 @@ void loadStereoCameraCalibration( const std::string& filename_left, const std::s
   cv::Mat R1, R2, P1, P2, Q;
   stereoRectify(params_left.K, params_left.d, params_right.K, params_right.d, cv::Size(width, height), params_right.R, params_right.t, R1, R2, P1, P2, Q);
 
+	std::cout << "Stereo Calibration: " << std::endl;
+	std::cout << P1 << std::endl;
+	std::cout << P2 << std::endl;
+	std::cout << R1 << std::endl;
+	std::cout << R2 << std::endl;
+
   CP_MAT_TO_ARRAY(R1, cam_info_left.R);
   CP_MAT_TO_ARRAY(P1, cam_info_left.P);
 
@@ -269,17 +280,16 @@ void saveOdometry(const std::string& filename, rosbag::Bag& bag)
   pretty_ifstream ifs(80, filename, std::ios::in);
 
   size_t seq = 0;
-  while( not ifs.eof() )
+	std::string line;
+  while (std::getline(ifs, line))
   {
+		std::stringstream ss(line);
+
     float x, y, yaw;
     uint32_t sec, nsec;
 
-    ifs >> sec >> nsec >> x >> y >> yaw;
-
-    //std::cout << sec << "." << nsec << " " << x << " " << y << " " << yaw << std::endl;
-
-    // check if something went wrong
-    assert( not ifs.fail() );
+    ss >> sec >> nsec >> x >> y >> yaw;
+		if (!ss) throw std::runtime_error("Invalid odometry entry!");
 
     ros::Time stamp(sec, nsec);
 
@@ -321,24 +331,22 @@ void saveIMU(const std::string& filename, rosbag::Bag& bag)
   pretty_ifstream ifs(80, filename, std::ios::in);
 
   size_t seq = 0;
-  while( not ifs.eof() )
+	std::string line;
+  while(std::getline(ifs, line))
   {
+		std::stringstream ss;
+
     float acc[3], gyro[3], R[9];
     uint32_t sec, nsec;
 
-    ifs >> sec >> nsec;
+    ss >> sec >> nsec;
+		for (int i = 0; i < 3; i++) ss >> gyro[i];
+    for (int i = 0; i < 3; i++) ss >> acc[i];
+    for (int i = 0; i < 9; i++) ss >> R[i];
 
-    // check if something went wrong
-    assert( not ifs.fail() );
+		if (!ss) throw std::runtime_error("Invalid IMU entry!");
 
     ros::Time stamp(sec, nsec);
-
-    for (int i = 0; i < 3; i++) ifs >> gyro[i];
-    for (int i = 0; i < 3; i++) ifs >> acc[i];
-    for (int i = 0; i < 9; i++) ifs >> R[i];
-
-    // check if something went wrong
-    assert( not ifs.fail() );
 
     sensor_msgs::Imu imu_msg;
     imu_msg.header.stamp = stamp;
@@ -368,32 +376,29 @@ void saveGT(const std::string& filename, rosbag::Bag& bag, bool with_covariance)
   pretty_ifstream ifs(80, filename, std::ios::in);
 
   size_t seq = 0;
-  while( not ifs.eof() )
+	std::string line;
+  while(std::getline(ifs, line))
   {
+		std::stringstream ss(line);
+
     uint32_t sec, nsec;
     float x, y, theta;
     float cov[9];
 
-    ifs >> sec >> nsec;
-    //std::cout << sec << "." << nsec << std::endl;
+    ss >> sec >> nsec;
+    ss >> x >> y >> theta;
+    if (with_covariance) for (int i = 0; i < 9; i++) ss >> cov[i];
 
-    // check if something went wrong
-    assert( not ifs.fail() );
+		if (!ss) throw std::runtime_error("Invalid GT entry!");
 
-    ros::Time stamp(sec, nsec);
+		ros::Time stamp(sec, nsec);
 
-    ifs >> x >> y >> theta;
-
-    // check if something went wrong
-    assert( not ifs.fail() );
-
-    if (with_covariance) {
-      for (int i = 0; i < 9; i++) ifs >> cov[i];
-
+		if (with_covariance)
+		{
       geometry_msgs::PoseWithCovarianceStamped pose;
       pose.header.stamp = stamp;
       pose.header.seq = seq;
-      pose.header.frame_id = "qtruth";
+      pose.header.frame_id = "groundtruth";
 
       pose.pose.pose.position.x = x;
       pose.pose.pose.position.y = y;
@@ -435,23 +440,6 @@ void saveGT(const std::string& filename, rosbag::Bag& bag, bool with_covariance)
   }
 }
 
-/* not yet finished */
-#if 0
-void saveTransforms(const std::string& filename, rosbag::Bag& bag)
-{
-  pretty_ifstream ifs(80, filename, std::ios::in);
-
-  size_t seq = 0;
-  while( not ifs.eof() )
-  {
-    
-
-    ifs.drawbar();
-    seq++;
-  }
-}
-#endif
-
 void saveLaser(const std::string& filename, rosbag::Bag& bag)
 {
   pretty_ifstream ifs(80, filename, std::ios::in);
@@ -468,10 +456,15 @@ void saveLaser(const std::string& filename, rosbag::Bag& bag)
   delta_angle = delta_angle * M_PI / 180.0;
 
   size_t seq = 0;
-  while(!ifs.eof()) {
-    uint32_t sec, nsec;
-    ifs >> sec >> nsec;
-    ros::Time stamp(sec, nsec);
+	std::string line;
+  while(std::getline(ifs, line))
+	{
+		std::stringstream ss(line);
+
+		uint32_t sec, nsec;
+    ss >> sec >> nsec;
+
+		ros::Time stamp(sec, nsec);
 
     sensor_msgs::LaserScan laser_msg;
     laser_msg.header.stamp = stamp;
@@ -482,9 +475,10 @@ void saveLaser(const std::string& filename, rosbag::Bag& bag)
     laser_msg.range_max = range_max;
     laser_msg.angle_min = angle_min;
     laser_msg.angle_max = angle_max;
-
     laser_msg.ranges.resize(scan_count);
-    for (size_t i = 0; i < scan_count; i++) ifs >> laser_msg.ranges[i];
+		for (size_t i = 0; i < scan_count; i++) ss >> laser_msg.ranges[i];
+
+		if (!ss) throw std::runtime_error("Invalid laser entry");
 
     bag.write("/scan", stamp, laser_msg);
     ifs.drawbar();
@@ -518,13 +512,6 @@ int main(int argc, char** argv)
     saveGT(options["groundtruth"].as<std::string>(), bag, options.count("gt-with-covariance"));
   }
 
-#if 0
-  if (options.count("static-transforms")) {
-    std::cout << "Parsing static transforms file..." << std::endl;
-    saveTransforms(options["static-transforms"].as<std::string>(), bag);
-  }
-#endif
-
   if (options.count("laser")) {
     std::cout << "Parsing laser data..." << std::endl;
     saveLaser(options["laser"].as<std::string>(), bag);
@@ -533,7 +520,7 @@ int main(int argc, char** argv)
   /** process images **/
   if (options.count("images") != 0)
   {
-    assert( options.count("calib") );
+		if (options.count("calib") == 0) throw std::runtime_error("Camera calibration is required");
 
     std::string left_images = options["images"].as<std::string>();
     cv::VideoCapture capture_left( left_images );
@@ -546,15 +533,17 @@ int main(int argc, char** argv)
 
     std::cout << "Parsing timestamps ..." << std::endl;
 
+		if (options.count("timestamps") == 0 && options.count("framerate") == 0) throw std::runtime_error("You need to specify either a timestamps file or a framerate");
+
     std::vector<ros::Time> timestamps = options.count("timestamps") ? loadTimestamps( options["timestamps"].as<std::string>() ) : loadTimestamps( nFrames, 1 / options["framerate"].as<float>() );
 
     std::cout << "loaded: " << timestamps.size() << " timestamps" << std::endl;
-    assert( nFrames == timestamps.size() );
-
+		if (nFrames != timestamps.size())
+			throw std::runtime_error("Number of timestamps does not match number of frames");
 
     if ( options.count("images_right") )
     {
-      assert( options.count("calib_right") );
+			if (options.count("calib_right") == 0) throw std::runtime_error("Right camera calibration is required");
 
       std::cout << "Parsing stereo camera calibrations ..." << std::endl;
       std::string left_calib = options["calib"].as<std::string>();
