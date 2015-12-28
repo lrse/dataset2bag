@@ -1,30 +1,36 @@
-Este paquete permite convertir datasets de imagenes y otros sensores a formato ROSBAG
+This package allows to convert non-ROS datasets containing images and other sensor data to a rosbag file. It uses a friendly and simple syntax to which most non-ROS datasets can be conformed, by simple scripting.
 
-# Sensores
+To see the available parameters use:
 
-El programa de conversion soporta diversos sensores:
+    rosrun dataset2bag dataset2bag --help
 
-* Imagenes (camara mono o camara estereo) + calibracion
-* Odometria
+# Sensor Types
 
-# Modo de Uso
+This package supports the following type of sensors:
 
-El conversor espera que se le indique un directorio del cual obtener los imagenes. Por otro lado, para setear
-los timestamps de las imagenes, se puede indicar un archivo conteniendo los timestamps o bien se puede asumir un framerate
-constante.
+* Images (either mono or stereo camera) + calibration
+* Odometry
+* Imu
+* Laser
+* Groundtruth
 
-Ejemplo de imagenes mono:
+## Images
 
-    dataset2bag --images="img/frame%4d.png" --calib=calibration.txt --timestamps=timestamps.txt -o out.bag
+The converter expects a directory where images should be stored. Images are read in alphabetical order. A video file can also be specified instead of a directory, from which frames will be extracted.
 
-# Formato de archivos
+For reading images, the corresponding timestamp of each image is expected. This is supplied in a file containing this data.
 
-*IMPORTANTE*: en los archivos de timestamps y odometria, tener cuidado de no dejar una linea en blanco al final
+Single camera example:
 
-## Calibracion
+    dataset2bag --images=img --calib=calibration.txt --timestamps=timestamps.txt -o out.bag
 
-La calibracion contiene los parametros en formato similar al de ROS: parametros intrinsecos (3x3), de distorsion (5x1) y los parametros extrinsecos de rotacion (3x3) y traslacion (3x1).
-Estos ultimos solo tienen sentido en el caso de un par estereo. En el caso monocular, asi como la camara estereo izquierda, la rotacion deberia ser la identidad y la traslacion un vector nulo.
+### Camera Calibration Syntax
+
+The camera calibration contains the image size, all instrinsic (3x3 matric) and extrinsic (3x3 for rotation and 3x1 for translation) parameters of the camera, plus distortion coefficients (5x1). In the monocular case, the extrinsic parameters should be set to an identity rotation matrix and a zero translation vector.
+
+Syntax:
+
+    WIDTH HEIGHT
 
     K11 K12 K13
     K21 K22 K23
@@ -38,49 +44,52 @@ Estos ultimos solo tienen sentido en el caso de un par estereo. En el caso monoc
 
     Tx Ty Tz
 
-## Timestamps
+### Timestamp File Syntax
 
-El archivo de timestamps deberia tener una linea por cada imagen, en el formato de:
+This file should contain one line per timestamp with the following format:
 
-    [segundos] [nanosegundos]
+    [seconds] [nanoseconds]
 
-## Odometria
+## Odometry
 
-Formato:
+Odometry information is used to represent 2D poses of the robot. The data will be stored as a nav_msgs/Odometry message and also published as a TF transform (from /odom to /base_link frames).
 
-    [segundos] [nanosegundos] [x] [y] [angulo]
+Format:
 
-Las unidades son metros y radianes.
+    [seconds] [nanoseconds] [x] [y] [angle]
+
+Units are in metres and radians.
 
 ## IMU
 
-Formato:
+This file should contain linear acceleration (m/s^2), angular velocity (rad/s) and orientation (3x3 matrix).
 
-    [segundos] [nanosegundos] [aX] [aY] [aZ] [wX] [wY] [wZ] [R1] ... [R9]
+Format:
 
-El archivo contiene: timestamp, aceleración (m/s^2), velocidad angular (rad/s), orientacion como matriz
-de 3x3
+    [seconds] [nanoseconds] [Ax] [Ay] [Az] [Wx] [Wy] [Wz] [R1] ... [R9]
 
 ## Ground-truth
 
-Este archivo contiene informacion de poses de ground-truth en 2D. El formato es el siguiente:
+This is used to store poses as geometry_msgs/PoseStamped or geometry_msgs/PoseWithCovarianceStamped. This is again in 2D.
 
-    [segundos] [nanosegundos] [x] [y] [theta]
+Format without covariance:
 
-Opcionalmente, se puede utilizar un archivo que contenga la informacion de covarianza de la pose:
+    [seconds] [nanoseconds] [x] [y] [theta]
 
-    [segundos] [nanosegundos] [x] [y] [theta] [Cxx] [Cxy] [Cxt] [Cyx] [Cyy] [Cyt] [Ctx] [Cty] [Ctt]
+With covariance:
+
+    [seconds] [nanoseconds] [x] [y] [theta] [Cxx] [Cxy] [Cxt] [Cyx] [Cyy] [Cyt] [Ctx] [Cty] [Ctt]
 
 ## Laser
 
-En este archivo se tiene primero unos valores del sensor:
+This file should first start with some parameters:
 
     [angle_increment] [scan_count] [min_range] [max_range] [min_angle] [max_angle]
 
-donde los angulos son en grados y las distancias son en metros.
+where angles are in degrees and distances in meters.
 
-Luego, se tiene una linea por scaneo con el siguiente formato:
+Then, for each scan there should be a line as:
 
-    [segundos] [nanosegundos] [range_1] ... [range_N]
+    [seconds] [nanoseconds] [range_1] ... [range_N]
 
 

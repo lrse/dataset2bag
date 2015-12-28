@@ -14,6 +14,7 @@
 #include <boost/tuple/tuple_io.hpp>
 #include <boost/numeric/ublas/io.hpp>
 #include <boost/numeric/ublas/matrix.hpp>
+#include <boost/filesystem.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -41,15 +42,17 @@ struct CameraParameters
   // extrinsic parameters, rotation (3x3) and translation (3x1)
   // only make sens for the right camera of a stereo pair
   cv::Mat R, t;
+
+	size_t width, height;
 };
 
 bool process_args(int argc, char** argv, po::variables_map& options)
 {
   po::options_description options_description("Options");
   options_description.add_options()
-    ("images,l", po::value<std::string>(), "pattern of left images or path to video (or mono-camera)")
+    ("images,l", po::value<std::string>(), "glob pattern of images (e.g. \"img/*.png\") or video file from which to extract frames (for monocular case or left images of stereo pair)")
 
-    ("images_right,r", po::value<std::string>(), "pattern of right images or path to video")
+    ("images_right,r", po::value<std::string>(), "right images of stereo pair, same expected input")
 
     ("odometry", po::value<std::string>(), "path to file containing 2D odometry data")
 
@@ -60,7 +63,6 @@ bool process_args(int argc, char** argv, po::variables_map& options)
     ("calib_right", po::value<std::string>(), "right camera calibration parameters file")
 
     ("timestamps,t", po::value<std::string>(), "path to file containing timestamps")
-    ("framerate,f", po::value<float>(), "frame-rate to assume when not supplying timestamps from file")
 
     ("imu", po::value<std::string>(), "path to IMU data file")
     ("groundtruth", po::value<std::string>(), "path to ground-truth data file")
@@ -113,41 +115,16 @@ std::vector<ros::Time> loadTimestamps(const std::string& filename)
   return timestamps;
 }
 
-/**
- * @brief load a timestamp list for a number of frames
- * in regular intervals.
- * 
- * @param nFrames
- *   number of frames
- * 
- * @param framerate
- *   framerate in frames / second
- */
-std::vector<ros::Time> loadTimestamps( size_t nFrames, double framerate )
-{
-  std::vector<ros::Time> timestamps;
-
-  // set initial time (in seconds)
-  // 0 is not allowed...
-  //~ std::cout << "min time: " << ros::TIME_MIN << std::endl;
-  double timestamp = ros::TIME_MIN.toSec();
-
-  for(size_t k=0; k<nFrames; k++) {
-    timestamps.push_back( ros::Time( timestamp ) );
-    timestamp += framerate;
-  }
-
-  return timestamps;
-}
-
 CameraParameters loadCameraCalibration( const std::string& filename )
 {
   CameraParameters ret;
 
   std::ifstream ifs(filename.c_str());
 
-  // Intrinsic parameters
+	/* image size */
+	ifs >> ret.width >> ret.height;
 
+	// Intrinsic parameters
   // K
   {
     boost::array<double, 9> intrinsics;
@@ -186,13 +163,13 @@ CameraParameters loadCameraCalibration( const std::string& filename )
   return ret;
 }
 
-sensor_msgs::CameraInfo loadCameraInfo( const CameraParameters& params, size_t width, size_t height )
+sensor_msgs::CameraInfo loadCameraInfo(const CameraParameters& params)
 {
   // create CameraInfo message
   sensor_msgs::CameraInfo camera_info;
 
-  camera_info.height = height;
-  camera_info.width = width;
+	camera_info.width = params.width;
+  camera_info.height = params.height;
   camera_info.distortion_model = "plumb_bob";
   camera_info.D = std::vector<double>( params.d.begin<double>(), params.d.end<double>() );
   CP_MAT_TO_ARRAY(params.K, camera_info.K);
@@ -205,24 +182,23 @@ sensor_msgs::CameraInfo loadCameraInfo( const CameraParameters& params, size_t w
   return camera_info;
 }
 
-sensor_msgs::CameraInfo loadCameraInfo( const std::string& filename, size_t width, size_t height )
+sensor_msgs::CameraInfo loadCameraInfo( const std::string& filename)
 {
-  CameraParameters params = loadCameraCalibration( filename );
-
-  return loadCameraInfo( params, width, height );
+  CameraParameters params = loadCameraCalibration(filename);
+  return loadCameraInfo(params);
 }
 
-void loadStereoCameraCalibration( const std::string& filename_left, const std::string& filename_right, size_t width, size_t height, sensor_msgs::CameraInfo& cam_info_left, sensor_msgs::CameraInfo& cam_info_right )
+void loadStereoCameraCalibration( const std::string& filename_left, const std::string& filename_right, sensor_msgs::CameraInfo& cam_info_left, sensor_msgs::CameraInfo& cam_info_right )
 {
-  CameraParameters params_left = loadCameraCalibration( filename_left );
-  CameraParameters params_right = loadCameraCalibration( filename_right );
+  CameraParameters params_left = loadCameraCalibration(filename_left);
+  CameraParameters params_right = loadCameraCalibration(filename_right);
 
-  cam_info_left = loadCameraInfo( params_left, width, height );
-  cam_info_right = loadCameraInfo( params_right, width, height );
+  cam_info_left = loadCameraInfo(params_left);
+  cam_info_right = loadCameraInfo(params_right);
 
   // Compute rectification transforms for each head of the stereo camera
   cv::Mat R1, R2, P1, P2, Q;
-  stereoRectify(params_left.K, params_left.d, params_right.K, params_right.d, cv::Size(width, height), params_right.R, params_right.t, R1, R2, P1, P2, Q);
+  stereoRectify(params_left.K, params_left.d, params_right.K, params_right.d, cv::Size(params_left.width, params_left.height), params_right.R, params_right.t, R1, R2, P1, P2, Q);
 
 	std::cout << "Stereo Calibration: " << std::endl;
 	std::cout << P1 << std::endl;
@@ -237,7 +213,7 @@ void loadStereoCameraCalibration( const std::string& filename_left, const std::s
   CP_MAT_TO_ARRAY(P2, cam_info_right.P);
 }
 
-void saveStream( cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info, const std::vector<ros::Time>& times, const std::string& frame_id, const std::string& topic, rosbag::Bag& bag )
+void saveStream(cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info, const std::vector<ros::Time>& times, const std::string& frame_id, const std::string& topic, rosbag::Bag& bag)
 {
   cv_bridge::CvImage ros_image;
   ProgressBar progress( 80 );
@@ -273,6 +249,83 @@ void saveStream( cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info,
     progress.drawbar( float(seq) / times.size() );
     seq++;
   }
+}
+
+void saveStream(const std::vector<boost::filesystem::directory_entry>& entries, sensor_msgs::CameraInfo camera_info, const std::vector<ros::Time>& times,
+								const std::string& frame_id, const std::string& topic, rosbag::Bag& bag)
+{
+  cv_bridge::CvImage ros_image;
+  ProgressBar progress(80);
+
+  uint seq = 0;
+
+	for (const auto& entry : entries)
+  {
+		ros_image.image = cv::imread(entry.path().string());
+
+    //~ std::cout << "loading image " << seq << "/" << times.size() << std::endl;
+    cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
+    ros_image.encoding = "rgb8";
+
+    sensor_msgs::ImagePtr ros_image_msg;
+
+    // create image message
+
+    ros_image_msg = ros_image.toImageMsg();
+    ros_image_msg->header.seq = seq;
+    ros_image_msg->header.stamp = times[ seq ];
+    ros_image_msg->header.frame_id = frame_id;
+
+    bag.write(topic + "/image_raw", times[ seq ], ros_image_msg);
+
+    // create CameraInfo message
+
+    //~ sensor_msgs::CameraInfo camera_info;
+    camera_info.header.seq = seq;
+    camera_info.header.stamp = times[ seq ];
+    camera_info.header.frame_id = frame_id;
+
+    bag.write(topic + "/camera_info", times[ seq ], camera_info);
+
+    progress.drawbar( float(seq) / times.size() );
+    seq++;
+  }
+}
+
+void process_images(const std::string& images_parameter, const sensor_msgs::CameraInfo& cam_info, const std::vector<ros::Time>& timestamps,
+										const std::string& frame, const std::string& topic, rosbag::Bag& bag)
+{
+	size_t frame_count;
+
+	/* process input images */
+	boost::filesystem::path images_path(images_parameter);
+	if (boost::filesystem::is_regular_file(images_path))
+	{
+		/* parameter assumed to be path to video file */
+		cv::VideoCapture capture(images_parameter);
+
+    frame_count = (size_t) capture.get(CV_CAP_PROP_FRAME_COUNT);
+		if (frame_count != timestamps.size()) throw std::runtime_error("Number of frames does not match number of timestamps");
+
+		saveStream(capture, cam_info, timestamps, frame, topic, bag);
+	}
+	else if	(boost::filesystem::is_directory(images_path))
+	{
+		std::vector<boost::filesystem::directory_entry> entries;
+		std::copy(boost::filesystem::directory_iterator(images_path), boost::filesystem::directory_iterator(), back_inserter(entries));
+		std::sort(entries.begin(), entries.end(),	[](const boost::filesystem::directory_entry& entry1, const boost::filesystem::directory_entry& entry2) -> bool {
+		    return entry1.path().filename() < entry2.path().filename();
+		});
+		std::remove_if(entries.begin(), entries.end(), [](const boost::filesystem::directory_entry& entry) -> bool { return !boost::filesystem::is_regular_file(entry.path()); });
+
+		frame_count = entries.size();
+		if (frame_count != timestamps.size()) throw std::runtime_error("Number of frames does not match number of timestamps");
+
+		saveStream(entries, cam_info, timestamps, frame, topic, bag);
+	}
+	else {
+		throw std::runtime_error("Invalid images parameter input");
+	}
 }
 
 void saveOdometry(const std::string& filename, rosbag::Bag& bag)
@@ -334,7 +387,7 @@ void saveIMU(const std::string& filename, rosbag::Bag& bag)
 	std::string line;
   while(std::getline(ifs, line))
   {
-		std::stringstream ss;
+		std::stringstream ss(line);
 
     float acc[3], gyro[3], R[9];
     uint32_t sec, nsec;
@@ -520,55 +573,46 @@ int main(int argc, char** argv)
   /** process images **/
   if (options.count("images") != 0)
   {
-		if (options.count("calib") == 0) throw std::runtime_error("Camera calibration is required");
+		if (options.count("timestamps") == 0) throw std::runtime_error("You need to specify either a timestamps file or a framerate");
+		if (options.count("calib") == 0 || (options.count("images_right") && !options.count("calib_right"))) throw std::runtime_error("Camera calibration is required");
 
-    std::string left_images = options["images"].as<std::string>();
-    cv::VideoCapture capture_left( left_images );
-
-    size_t width = (size_t) capture_left.get( CV_CAP_PROP_FRAME_WIDTH );
-    size_t height = (size_t) capture_left.get( CV_CAP_PROP_FRAME_HEIGHT );
-    size_t nFrames = (size_t) capture_left.get( CV_CAP_PROP_FRAME_COUNT );
-
-    std::cout << "-- Loading " << nFrames << " frames of size " << width << "x" << height << std::endl;
-
-    std::cout << "Parsing timestamps ..." << std::endl;
-
-		if (options.count("timestamps") == 0 && options.count("framerate") == 0) throw std::runtime_error("You need to specify either a timestamps file or a framerate");
-
-    std::vector<ros::Time> timestamps = options.count("timestamps") ? loadTimestamps( options["timestamps"].as<std::string>() ) : loadTimestamps( nFrames, 1 / options["framerate"].as<float>() );
-
-    std::cout << "loaded: " << timestamps.size() << " timestamps" << std::endl;
-		if (nFrames != timestamps.size())
-			throw std::runtime_error("Number of timestamps does not match number of frames");
-
-    if ( options.count("images_right") )
+		/* load camera calibrations */
+		sensor_msgs::CameraInfo cam_info_left, cam_info_right;
+		if (options.count("calib_right"))
     {
-			if (options.count("calib_right") == 0) throw std::runtime_error("Right camera calibration is required");
-
       std::cout << "Parsing stereo camera calibrations ..." << std::endl;
       std::string left_calib = options["calib"].as<std::string>();
       std::string right_calib = options["calib_right"].as<std::string>();
-      sensor_msgs::CameraInfo cam_info_left, cam_info_right;
-      loadStereoCameraCalibration( left_calib, right_calib, width, height, cam_info_left, cam_info_right );
-
-      std::string right_images = options["images_right"].as<std::string>();
-      cv::VideoCapture capture_right( right_images );
-
-      std::cout << "Parsing left stereo images ..." << std::endl;
-      saveStream( capture_left, cam_info_left, timestamps, "camera_left", "/stereo/left", bag );
-
-      std::cout << "Parsing right stereo images ..." << std::endl;
-      saveStream( capture_right, cam_info_right, timestamps, "camera_right", "/stereo/right", bag );
+      loadStereoCameraCalibration(left_calib, right_calib, cam_info_left, cam_info_right);
     }
     else
     {
       std::cout << "Parsing camera calibration ..." << std::endl;
       std::string left_calib = options["calib"].as<std::string>();
-      sensor_msgs::CameraInfo cam_info_left = loadCameraInfo( left_calib, width, height );
-
-      std::cout << "Parsing camera images ..." << std::endl;
-      saveStream( capture_left, cam_info_left, timestamps, "camera", "/camera", bag );
+      sensor_msgs::CameraInfo cam_info_left = loadCameraInfo(left_calib);
     }
+
+		/* load timestamps from file */
+		std::vector<ros::Time> timestamps;
+		if (options.count("timestamps")) {
+			std::cout << "Parsing timestamps ..." << std::endl;
+			timestamps = loadTimestamps(options["timestamps"].as<std::string>());
+			std::cout << "loaded: " << timestamps.size() << " timestamps" << std::endl;
+		}
+
+		/* load images */
+		if (options.count("images_right"))
+		{
+			std::cout << "Parsing left stereo images ..." << std::endl;
+			process_images(options["images"].as<std::string>(), cam_info_left, timestamps, "camera_left", "/stereo/left", bag);
+			std::cout << "Parsing right stereo images ..." << std::endl;
+			process_images(options["images_right"].as<std::string>(), cam_info_right, timestamps, "camera_right", "/stereo/right", bag);
+		}
+		else
+		{
+			std::cout << "Parsing camera images ..." << std::endl;
+			process_images(options["images"].as<std::string>(), cam_info_left, timestamps, "camera", "/camera", bag);
+		}
   }
 
   bag.close();

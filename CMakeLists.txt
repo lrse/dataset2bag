@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS "-std=c++11 -Wall ${CMAKE_CXX_FLAGS}")
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS cv_bridge rosbag roscpp sensor_msgs tf)
 find_package(OpenCV REQUIRED)
-find_package(Boost REQUIRED program_options)
+find_package(Boost REQUIRED program_options filesystem)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
