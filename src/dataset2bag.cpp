@@ -290,6 +290,7 @@ void saveStream(const std::vector<boost::filesystem::directory_entry>& entries, 
 			std::ifstream image_file(entry.path().string(), std::ios::binary);
 			sensor_msgs::CompressedImage compressed_image;
 			compressed_image.header.seq = seq;
+			compressed_image.format = (compression_format == "jpg" ? "jpeg" : "png");
 			compressed_image.header.stamp = times[seq];
 			compressed_image.header.frame_id = frame_id;
 			compressed_image.data.assign(std::istreambuf_iterator<char>(image_file), std::istreambuf_iterator<char>());
