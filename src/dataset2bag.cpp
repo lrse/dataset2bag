@@ -54,6 +54,8 @@ bool process_args(int argc, char** argv, po::variables_map& options)
 
     ("images_right,r", po::value<std::string>(), "right images of stereo pair, same expected input")
 
+		("compressed_images", po::value<std::string>(), "specify if, when reading images from directory, they should be saved in their original compressed format. Specify the compression format, either \"png\" or \"jpg\"")
+
     ("odometry", po::value<std::string>(), "path to file containing 2D odometry data")
 
     ("output,o", po::value<std::string>()->required(), "output bag file")
@@ -261,7 +263,7 @@ void saveStream(cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info, 
 }
 
 void saveStream(const std::vector<boost::filesystem::directory_entry>& entries, sensor_msgs::CameraInfo camera_info, const std::vector<ros::Time>& times,
-								const std::string& frame_id, const std::string& topic, rosbag::Bag& bag)
+								const std::string& frame_id, const std::string& topic, const std::string& compression_format, rosbag::Bag& bag)
 {
   cv_bridge::CvImage ros_image;
   ProgressBar progress(80);
@@ -270,26 +272,30 @@ void saveStream(const std::vector<boost::filesystem::directory_entry>& entries, 
 
 	for (const auto& entry : entries)
   {
-		ros_image.image = cv::imread(entry.path().string());
+		if (compression_format.empty())
+		{
+			ros_image.image = cv::imread(entry.path().string());
+			cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
+			ros_image.encoding = "rgb8";
 
-    //~ std::cout << "loading image " << seq << "/" << times.size() << std::endl;
-    cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
-    ros_image.encoding = "rgb8";
+			sensor_msgs::ImagePtr ros_image_msg;
+			ros_image_msg = ros_image.toImageMsg();
+			ros_image_msg->header.seq = seq;
+			ros_image_msg->header.stamp = times[ seq ];
+			ros_image_msg->header.frame_id = frame_id;
+			bag.write(topic + "/image_raw", times[ seq ], ros_image_msg);
+		}
+		else
+		{
+			std::ifstream image_file(entry.path().string(), std::ios::binary);
+			sensor_msgs::CompressedImage compressed_image;
+			compressed_image.header.seq = seq;
+			compressed_image.header.stamp = times[seq];
+			compressed_image.header.frame_id = frame_id;
+			compressed_image.data.assign(std::istreambuf_iterator<char>(image_file), std::istreambuf_iterator<char>());
+			bag.write(topic + "/image_raw/compressed", times[ seq ], compressed_image);
+		}
 
-    sensor_msgs::ImagePtr ros_image_msg;
-
-    // create image message
-
-    ros_image_msg = ros_image.toImageMsg();
-    ros_image_msg->header.seq = seq;
-    ros_image_msg->header.stamp = times[ seq ];
-    ros_image_msg->header.frame_id = frame_id;
-
-    bag.write(topic + "/image_raw", times[ seq ], ros_image_msg);
-
-    // create CameraInfo message
-
-    //~ sensor_msgs::CameraInfo camera_info;
     camera_info.header.seq = seq;
     camera_info.header.stamp = times[ seq ];
     camera_info.header.frame_id = frame_id;
@@ -302,7 +308,7 @@ void saveStream(const std::vector<boost::filesystem::directory_entry>& entries, 
 }
 
 void process_images(const std::string& images_parameter, const sensor_msgs::CameraInfo& cam_info, const std::vector<ros::Time>& timestamps,
-										const std::string& frame, const std::string& topic, rosbag::Bag& bag)
+										const std::string& frame, const std::string& topic, const std::string& compression_format, rosbag::Bag& bag)
 {
 	size_t frame_count;
 
@@ -337,7 +343,7 @@ void process_images(const std::string& images_parameter, const sensor_msgs::Came
 		std::cout << "Found " << frame_count << " images in directory" << std::endl;
 		if (frame_count != timestamps.size()) throw std::runtime_error("Number of frames does not match number of timestamps");
 
-		saveStream(entries, cam_info, timestamps, frame, topic, bag);
+		saveStream(entries, cam_info, timestamps, frame, topic, compression_format, bag);
 	}
 	else {
 		throw std::runtime_error("Invalid images parameter input");
@@ -615,8 +621,16 @@ int main(int argc, char** argv)
   /** process images **/
   if (options.count("images") != 0)
   {
-		if (!input_is_video(options["images"].as<std::string>()) && options.count("timestamps") == 0)
+		bool is_video = input_is_video(options["images"].as<std::string>());
+		if (!is_video && options.count("timestamps") == 0)
 			throw std::runtime_error("You need to specify a timestamps file");
+
+		std::string compression_format;
+		if (!is_video && options.count("compressed_images"))
+			compression_format = options["compressed_images"].as<std::string>();
+
+		if (compression_format != "jpg" && compression_format != "png") throw std::runtime_error("Only \"jpg\" or \"png\" compressed image formats are allowed");
+
 		if (options.count("calib") == 0 || (options.count("images_right") && !options.count("calib_right"))) throw std::runtime_error("Camera calibration is required");
 
 		/* load camera calibrations */
@@ -648,14 +662,14 @@ int main(int argc, char** argv)
 		if (options.count("images_right"))
 		{
 			std::cout << "Parsing left stereo images ..." << std::endl;
-			process_images(options["images"].as<std::string>(), cam_info_left, timestamps, "camera_left", "/stereo/left", bag);
+			process_images(options["images"].as<std::string>(), cam_info_left, timestamps, "camera_left", "/stereo/left", compression_format, bag);
 			std::cout << "Parsing right stereo images ..." << std::endl;
-			process_images(options["images_right"].as<std::string>(), cam_info_right, timestamps, "camera_right", "/stereo/right", bag);
+			process_images(options["images_right"].as<std::string>(), cam_info_right, timestamps, "camera_right", "/stereo/right", compression_format, bag);
 		}
 		else
 		{
 			std::cout << "Parsing camera images ..." << std::endl;
-			process_images(options["images"].as<std::string>(), cam_info_left, timestamps, "camera", "/camera", bag);
+			process_images(options["images"].as<std::string>(), cam_info_left, timestamps, "camera", "/camera", compression_format, bag);
 		}
   }
 
