@@ -160,6 +160,8 @@ CameraParameters loadCameraCalibration( const std::string& filename )
     CP_ARRAY_TO_MAT(translation, ret.t);
   }
 
+  if (!ifs) throw std::runtime_error("Error reading calibration file");
+
   return ret;
 }
 
@@ -219,10 +221,11 @@ void saveStream(cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info, 
   ProgressBar progress( 80 );
 
   uint seq = 0;
+	size_t frame_count = (size_t)capture.get(CV_CAP_PROP_FRAME_COUNT);
 
   while (capture.read(ros_image.image) /*&& seq < 500*/)
   {
-    //~ std::cout << "loading image " << seq << "/" << times.size() << std::endl;
+    //std::cout << "loading image " << seq << "/" << frame_count << std::endl;
     cv::cvtColor(ros_image.image, ros_image.image, CV_BGR2RGB);
     ros_image.encoding = "rgb8";
 
@@ -232,21 +235,27 @@ void saveStream(cv::VideoCapture& capture, sensor_msgs::CameraInfo camera_info, 
 
     ros_image_msg = ros_image.toImageMsg();
     ros_image_msg->header.seq = seq;
-    ros_image_msg->header.stamp = times[ seq ];
     ros_image_msg->header.frame_id = frame_id;
 
-    bag.write(topic + "/image_raw", times[ seq ], ros_image_msg);
+		if (times.empty()) {
+			ros_image_msg->header.stamp = ros::Time().fromSec(capture.get(CV_CAP_PROP_POS_MSEC) * 1e-3);
+		}
+		else {
+			ros_image_msg->header.stamp = times[seq];
+		}
+
+    bag.write(topic + "/image_raw", ros_image_msg->header.stamp, ros_image_msg);
 
     // create CameraInfo message
 
     //~ sensor_msgs::CameraInfo camera_info;
     camera_info.header.seq = seq;
-    camera_info.header.stamp = times[ seq ];
+    camera_info.header.stamp = ros_image_msg->header.stamp;
     camera_info.header.frame_id = frame_id;
 
-    bag.write(topic + "/camera_info", times[ seq ], camera_info);
+    bag.write(topic + "/camera_info", ros_image_msg->header.stamp, camera_info);
 
-    progress.drawbar( float(seq) / times.size() );
+    progress.drawbar( float(seq) / frame_count );
     seq++;
   }
 }
@@ -305,7 +314,8 @@ void process_images(const std::string& images_parameter, const sensor_msgs::Came
 		cv::VideoCapture capture(images_parameter);
 
     frame_count = (size_t) capture.get(CV_CAP_PROP_FRAME_COUNT);
-		if (frame_count != timestamps.size()) throw std::runtime_error("Number of frames does not match number of timestamps");
+		std::cout << "Read video with " << frame_count << " frames" << std::endl;
+		if (!timestamps.empty() && frame_count != timestamps.size()) throw std::runtime_error("Number of frames does not match number of timestamps");
 
 		saveStream(capture, cam_info, timestamps, frame, topic, bag);
 	}
@@ -316,9 +326,15 @@ void process_images(const std::string& images_parameter, const sensor_msgs::Came
 		std::sort(entries.begin(), entries.end(),	[](const boost::filesystem::directory_entry& entry1, const boost::filesystem::directory_entry& entry2) -> bool {
 		    return entry1.path().filename() < entry2.path().filename();
 		});
-		std::remove_if(entries.begin(), entries.end(), [](const boost::filesystem::directory_entry& entry) -> bool { return !boost::filesystem::is_regular_file(entry.path()); });
+
+		std::vector<boost::filesystem::directory_entry> filtered_entries(entries.size());
+		auto end_it = std::remove_copy_if(entries.begin(), entries.end(), filtered_entries.begin(), [](const boost::filesystem::directory_entry& entry) -> bool { return !boost::filesystem::is_regular_file(entry.path()); });
+
+		filtered_entries.resize(std::distance(filtered_entries.begin(), end_it));
+		entries = filtered_entries;
 
 		frame_count = entries.size();
+		std::cout << "Found " << frame_count << " images in directory" << std::endl;
 		if (frame_count != timestamps.size()) throw std::runtime_error("Number of frames does not match number of timestamps");
 
 		saveStream(entries, cam_info, timestamps, frame, topic, bag);
@@ -326,6 +342,14 @@ void process_images(const std::string& images_parameter, const sensor_msgs::Came
 	else {
 		throw std::runtime_error("Invalid images parameter input");
 	}
+}
+
+bool input_is_video(const std::string& parameter)
+{
+	boost::filesystem::path path(parameter);
+	if (boost::filesystem::is_regular_file(path)) return true;
+	else if (boost::filesystem::is_directory(path)) return false;
+	else throw std::runtime_error("Invalid images parameter input");
 }
 
 void saveOdometry(const std::string& filename, rosbag::Bag& bag)
@@ -412,8 +436,21 @@ void saveIMU(const std::string& filename, rosbag::Bag& bag)
     imu_msg.linear_acceleration.y = acc[1];
     imu_msg.linear_acceleration.z = acc[2];
 
+		imu_msg.angular_velocity_covariance[0] = 0.001f;
+		imu_msg.angular_velocity_covariance[1] = 0.0f;
+		imu_msg.angular_velocity_covariance[2] = 0.0f;
+		imu_msg.angular_velocity_covariance[3] = 0.0f;
+		imu_msg.angular_velocity_covariance[4] = 0.001f;
+		imu_msg.angular_velocity_covariance[5] = 0.0f;
+		imu_msg.angular_velocity_covariance[6] = 0.0f;
+		imu_msg.angular_velocity_covariance[7] = 0.0f;
+		imu_msg.angular_velocity_covariance[8] = 0.001f;
+		imu_msg.linear_acceleration_covariance = imu_msg.orientation_covariance = imu_msg.angular_velocity_covariance;
+
     tf::Quaternion Q;
-    tf::Matrix3x3 Rmat(R[0], R[1], R[2], R[3], R[4], R[5], R[6], R[7], R[8]);
+    tf::Matrix3x3 Rmat(R[0], R[1], R[2],
+											 R[3], R[4], R[5],
+											 R[6], R[7], R[8]);
     Rmat.getRotation(Q);
     tf::quaternionTFToMsg(Q, imu_msg.orientation);
 
@@ -497,11 +534,17 @@ void saveLaser(const std::string& filename, rosbag::Bag& bag)
 {
   pretty_ifstream ifs(80, filename, std::ios::in);
 
+	std::string line;
+	std::getline(ifs, line);
+	std::stringstream ss_first(line);
+
   float delta_angle, range_min, range_max, angle_min, angle_max;
   size_t scan_count;
-  ifs >> delta_angle >> scan_count;
-  ifs >> range_min >> range_max;
-  ifs >> angle_min >> angle_max;
+  ss_first >> delta_angle >> scan_count;
+  ss_first >> range_min >> range_max;
+  ss_first >> angle_min >> angle_max;
+
+	if (!ss_first) throw std::runtime_error("Invalid laser header");
   //std::cout << "reading laser: " << delta_angle << " " << scan_count << " " << range_min << " " << range_max << " " << angle_min << " " << angle_max << std::endl;
 
   angle_min = angle_min * M_PI / 180.0;
@@ -509,7 +552,6 @@ void saveLaser(const std::string& filename, rosbag::Bag& bag)
   delta_angle = delta_angle * M_PI / 180.0;
 
   size_t seq = 0;
-	std::string line;
   while(std::getline(ifs, line))
 	{
 		std::stringstream ss(line);
@@ -573,7 +615,8 @@ int main(int argc, char** argv)
   /** process images **/
   if (options.count("images") != 0)
   {
-		if (options.count("timestamps") == 0) throw std::runtime_error("You need to specify either a timestamps file or a framerate");
+		if (!input_is_video(options["images"].as<std::string>()) && options.count("timestamps") == 0)
+			throw std::runtime_error("You need to specify a timestamps file");
 		if (options.count("calib") == 0 || (options.count("images_right") && !options.count("calib_right"))) throw std::runtime_error("Camera calibration is required");
 
 		/* load camera calibrations */
@@ -592,11 +635,12 @@ int main(int argc, char** argv)
       sensor_msgs::CameraInfo cam_info_left = loadCameraInfo(left_calib);
     }
 
-		/* load timestamps from file */
 		std::vector<ros::Time> timestamps;
+		/* load timestamps from file */
 		if (options.count("timestamps")) {
 			std::cout << "Parsing timestamps ..." << std::endl;
 			timestamps = loadTimestamps(options["timestamps"].as<std::string>());
+			if (timestamps.empty()) throw std::runtime_error("No timestamps were found in timestamps file");
 			std::cout << "loaded: " << timestamps.size() << " timestamps" << std::endl;
 		}
 
