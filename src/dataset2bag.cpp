@@ -647,7 +647,7 @@ int main(int argc, char** argv)
     {
       std::cout << "Parsing camera calibration ..." << std::endl;
       std::string left_calib = options["calib"].as<std::string>();
-      sensor_msgs::CameraInfo cam_info_left = loadCameraInfo(left_calib);
+      cam_info_left = loadCameraInfo(left_calib);
     }
 
 		std::vector<ros::Time> timestamps;
