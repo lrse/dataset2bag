@@ -70,6 +70,8 @@ bool process_args(int argc, char** argv, po::variables_map& options)
     ("groundtruth", po::value<std::string>(), "path to ground-truth data file")
     ("gt-with-covariance", "if specified, the ground-truth file contains covariance information")
 
+		("chunk-size", po::value<int>(), "set chunk size in KB of bag file (default: 768)")
+
     //("static-transforms", po::value<std::string>(), "path to file containing static transforms between sensors")
     ("laser", po::value<std::string>(), "path to laser scans file")
 
@@ -126,43 +128,35 @@ CameraParameters loadCameraCalibration( const std::string& filename )
 	/* image size */
 	ifs >> ret.width >> ret.height;
 
-	// Intrinsic parameters
-  // K
-  {
-    boost::array<double, 9> intrinsics;
-    for(int i = 0; i < 9; ++i) ifs >> intrinsics[i];
-    ret.K = cv::Mat(3, 3, CV_64FC1);
-    CP_ARRAY_TO_MAT(intrinsics, ret.K);
-  }
+	boost::array<double, 9> intrinsics;
+	for(int i = 0; i < 9; ++i) ifs >> intrinsics[i];
+	ret.K = cv::Mat(3, 3, CV_64FC1);
+	CP_ARRAY_TO_MAT(intrinsics, ret.K);
 
-  // d
-  {
-    boost::array<double, 5> dist_coefficients;
-    for(int i = 0; i < 5; ++i) ifs >> dist_coefficients[i];
-    ret.d = cv::Mat(5, 1, CV_64FC1);
-    CP_ARRAY_TO_MAT(dist_coefficients, ret.d);
-  }
+	boost::array<double, 5> dist_coefficients;
+	for(int i = 0; i < 5; ++i) ifs >> dist_coefficients[i];
+	ret.d = cv::Mat(5, 1, CV_64FC1);
+	CP_ARRAY_TO_MAT(dist_coefficients, ret.d);
 
-  // Extrinsic parameters
+	boost::array<double, 9> rotation;
+	for(int i = 0; i < 9; ++i) ifs >> rotation[i];
+	ret.R = cv::Mat(3, 3, CV_64FC1);
+	CP_ARRAY_TO_MAT(rotation, ret.R);
 
-  // R
-  {
-    boost::array<double, 9> rotation;
-    for(int i = 0; i < 9; ++i) ifs >> rotation[i];
-    ret.R = cv::Mat(3, 3, CV_64FC1);
-    CP_ARRAY_TO_MAT(rotation, ret.R);
-  }
-
-  // t
-  {
-    boost::array<double, 3> translation;
-    for(int i = 0; i < 3; ++i) ifs >> translation[i];
-    //~ ret.t = cv::Mat(3, 1, CV_64FC1, translation.c_array());
-    ret.t = cv::Mat(3, 1, CV_64FC1);
-    CP_ARRAY_TO_MAT(translation, ret.t);
-  }
+	boost::array<double, 3> translation;
+	for(int i = 0; i < 3; ++i) ifs >> translation[i];
+	//~ ret.t = cv::Mat(3, 1, CV_64FC1, translation.c_array());
+	ret.t = cv::Mat(3, 1, CV_64FC1);
+	CP_ARRAY_TO_MAT(translation, ret.t);
 
   if (!ifs) throw std::runtime_error("Error reading calibration file");
+
+	std::cout << "Calibration:" << std::endl;
+	std::cout << ret.width << " x " << ret.height << std::endl;
+	std::cout << ret.K << std::endl;
+	std::cout << ret.d << std::endl;
+	std::cout << ret.R << std::endl;
+	std::cout << ret.t << std::endl;
 
   return ret;
 }
@@ -598,6 +592,12 @@ int main(int argc, char** argv)
   rosbag::Bag bag;
 
   bag.open(options["output"].as<std::string>(), rosbag::bagmode::Write);
+
+	if (options.count("chunk-size")) {
+		size_t chunk_size = options["chunk-size"].as<int>();
+		if (chunk_size <= 0) throw std::runtime_error("Invalid chunk size");
+		bag.setChunkThreshold(chunk_size * 1024);
+	}
 
   if (options.count("odometry")) {
     std::cout << "Parsing odometry file..." << std::endl;
