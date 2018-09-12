@@ -627,11 +627,11 @@ int main(int argc, char** argv)
 			throw std::runtime_error("You need to specify a timestamps file");
 
 		std::string compression_format;
-		if (!is_video && options.count("compressed_images"))
+		if (!is_video && options.count("compressed_images")) {
 			compression_format = options["compressed_images"].as<std::string>();
 
-		if (compression_format != "jpg" && compression_format != "png") throw std::runtime_error("Only \"jpg\" or \"png\" compressed image formats are allowed");
-
+			if (compression_format != "jpg" && compression_format != "png") throw std::runtime_error("Only \"jpg\" or \"png\" compressed image formats are allowed");
+		}
 		if (options.count("calib") == 0 || (options.count("images_right") && !options.count("calib_right"))) throw std::runtime_error("Camera calibration is required");
 
 		/* load camera calibrations */
