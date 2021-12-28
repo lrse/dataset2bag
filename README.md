@@ -84,12 +84,14 @@ With covariance:
 
 This file should first start with some parameters:
 
-    [angle_increment] [scan_count] [min_range] [max_range] [min_angle] [max_angle]
+    [angle_increment] [ray_count] [min_range] [max_range] [min_angle] [max_angle]
 
-where angles are in degrees and distances in meters.
+where angles are in degrees and distances in meters. `ray_count` refers to the number of rays contained in one laser scan sample.
 
 Then, for each scan there should be a line as:
 
     [seconds] [nanoseconds] [range_1] ... [range_N]
+    
+(where N equals `ray_count`).
 
 
